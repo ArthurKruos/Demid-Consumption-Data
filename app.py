@@ -80,7 +80,7 @@ def fetch_reddit_data(keywords, limit=10):
     data = []
     try:
         # Busca no subreddit de jogos mais popular e nos posts em geral (r/all)
-        for submission in reddit.subreddit('gaming+all').search(query, limit=limit):
+        for submission in reddit.subreddit('JogosBrasil').search(query, limit=limit):
             data.append({
                 'Fonte': 'Reddit',
                 'Título': submission.title,
