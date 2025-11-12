@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import time
-import praw # Para Reddit
 import tweepy # Para X/Twitter
+from getdata.redditdata import fetch_reddit_data
+from getdata.twitterdata import fetch_x_data # <--- NOVA IMPORTAÇÃO AQUI!
 
 # --- 1. Credenciais e Configurações ---
 
@@ -28,17 +29,17 @@ keywords_input = st.sidebar.text_input(
 
 # Seleção das fontes
 st.sidebar.subheader("🌐 Fontes de Dados")
-use_reddit = st.sidebar.checkbox("Reddit", value=True)
-use_x = st.sidebar.checkbox("X (Twitter)", value=True)
-use_youtube = st.sidebar.checkbox("YouTube", value=True)
-use_twitch = st.sidebar.checkbox("Twitch", value=True)
+use_reddit = st.sidebar.checkbox("Reddit", value=False)
+use_x = st.sidebar.checkbox("X (Twitter)", value=False)
+use_youtube = st.sidebar.checkbox("YouTube", value=False)
+use_twitch = st.sidebar.checkbox("Twitch", value=False)
 
 
 # --- Sidebar: Credenciais do Reddit ---
 st.sidebar.subheader("🔒 Credenciais do Reddit (PRAW)")
 CLIENT_ID = st.sidebar.text_input("Reddit Client ID", type="password")
 CLIENT_SECRET = st.sidebar.text_input("Reddit Client Secret", type="password")
-USER_AGENT = "StreamlitApp_v1"
+USER_AGENT = "StreamlitApp_v1" # Definido aqui, mas usado na função importada
 
 # --- Sidebar: Credenciais do X/Twitter ---
 st.sidebar.subheader("🐦 Credenciais do X/Twitter (Tweepy)")
@@ -50,52 +51,8 @@ BEARER_TOKEN = st.sidebar.text_input("X/Twitter Bearer Token", type="password")
 search_button = st.sidebar.button("🔍 Iniciar Busca")
 
 
-# --- 2. Funções de Busca (Reddit - REAL) ---
-
-def get_reddit_instance():
-    """Tenta criar uma instância do PRAW com as credenciais."""
-    if not CLIENT_ID or not CLIENT_SECRET:
-        return None
-    try:
-        reddit = praw.Reddit(
-            client_id=CLIENT_ID,
-            client_secret=CLIENT_SECRET,
-            user_agent=USER_AGENT
-        )
-        return reddit
-    except Exception as e:
-        st.error(f"Erro ao inicializar o PRAW. Verifique suas credenciais: {e}")
-        return None
-
-def fetch_reddit_data(keywords, limit=10):
-    """Busca dados no Reddit usando PRAW."""
-    reddit = get_reddit_instance()
-    
-    if reddit is None:
-        return pd.DataFrame() # Retorna vazio se faltarem credenciais
-
-    query = " OR ".join(keywords) # Ex: "Elden Ring OR WoW"
-    st.info(f"⚙️ Buscando no Reddit por: **{query}**")
-    
-    data = []
-    try:
-        # Busca no subreddit de jogos mais popular e nos posts em geral (r/all)
-        for submission in reddit.subreddit('JogosBrasil').search(query, limit=limit):
-            data.append({
-                'Fonte': 'Reddit',
-                'Título': submission.title,
-                'Subreddit': submission.subreddit.display_name,
-                'Conteúdo (Selftext)': submission.selftext[:100] + '...' if submission.selftext else 'Link/Mídia',
-                'Upvotes': submission.score,
-                'Comentários': submission.num_comments,
-                'Link': f"https://www.reddit.com{submission.permalink}",
-                'Data': pd.to_datetime(submission.created_utc, unit='s')
-            })
-    except Exception as e:
-        st.error(f"Erro na busca do Reddit: {e}")
-        return pd.DataFrame()
-
-    return pd.DataFrame(data)
+# --- 2. Funções de Busca (Reddit - REMOVIDAS daqui e movidas para getdata/redditdata.py) ---
+# A função fetch_reddit_data agora está importada no início do arquivo.
 
 
 # --- 3. Funções de Busca (X/Twitter - REAL) ---
@@ -105,13 +62,14 @@ def get_x_client():
     if not BEARER_TOKEN:
         return None
     try:
+        # A nova API do X/Twitter (v2) usa tweepy.Client
         client = tweepy.Client(BEARER_TOKEN)
         return client
     except Exception as e:
         st.error(f"Erro ao inicializar o Tweepy. Verifique seu Bearer Token: {e}")
         return None
 
-def fetch_x_data(keywords, limit=10): # <-- Função ATUALIZADA
+def fetch_x_data(keywords, limit=10):
     """Busca dados no X/Twitter usando Tweepy (API v2)."""
     client = get_x_client()
 
@@ -119,8 +77,9 @@ def fetch_x_data(keywords, limit=10): # <-- Função ATUALIZADA
         st.error("Por favor, insira o Bearer Token do X/Twitter na sidebar.")
         return pd.DataFrame()
 
-    # Formata a query: Ex: "Elden Ring OR WoW lang:pt -is:retweet"
-    query = " OR ".join(keywords) + " -is:retweet" # Exclui retweets para melhor qualidade
+    # Formata a query: Ex: "Elden Ring OR WoW -is:retweet lang:pt"
+    # Adicionando 'lang:pt' para tentar focar no conteúdo em português, se suportado pelo plano da API
+    query = " OR ".join(keywords) + " -is:retweet" 
     st.info(f"⚙️ Buscando no X/Twitter por: **{query}**")
     
     data = []
@@ -208,12 +167,13 @@ if search_button:
         with st.spinner("Buscando dados nas plataformas..."):
             
             if use_reddit:
-                df_reddit = fetch_reddit_data(keywords)
+                # Chama a função importada, passando as credenciais do sidebar
+                df_reddit = fetch_reddit_data(CLIENT_ID, CLIENT_SECRET, USER_AGENT, keywords) 
                 if not df_reddit.empty:
                     all_results.append(df_reddit)
             
             if use_x:
-                df_x = fetch_x_data(keywords)
+                df_x = fetch_x_data(BEARER_TOKEN, keywords, limit=10)
                 if not df_x.empty:
                     all_results.append(df_x)
 
