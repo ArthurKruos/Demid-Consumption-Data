@@ -36,8 +36,8 @@ keywords_input = st.sidebar.text_input(
 st.sidebar.subheader("🌐 Fontes de Dados")
 use_reddit = st.sidebar.checkbox("Reddit", value=False)
 use_x = st.sidebar.checkbox("X (Twitter)", value=False)
-use_youtube = st.sidebar.checkbox("YouTube", value=False)
-use_twitch = st.sidebar.checkbox("Twitch", value=False)
+use_youtube = st.sidebar.checkbox("YouTube (em construção)", value=False)
+use_twitch = st.sidebar.checkbox("Twitch (em construção)", value=False)
 
 
 # --- Sidebar: Credenciais do Reddit ---
@@ -121,39 +121,39 @@ def fetch_x_data(keywords, limit=10):
 
 # --- 4. Funções de Busca (YouTube e Twitch - MOCKUP) ---
 
-@st.cache_data
-def fetch_youtube_data(keywords, limit=5):
-    """MOCKUP: Simula a busca de dados no YouTube."""
-    st.info(f"⚙️ Buscando no YouTube por: **{keywords}** (MOCKUP)")
-    time.sleep(1)
-    data = []
-    for i in range(limit):
-        data.append({
-            'Fonte': 'YouTube',
-            'Canal': f"CanalGaming_{i+1}",
-            'Vídeo': f"Gameplay de {keywords[0]} - Novo Lançamento",
-            'Visualizações': 5000 + i*100,
-            'Link': 'URL_YouTube',
-            'Data': pd.Timestamp.now() - pd.Timedelta(weeks=i)
-        })
-    return pd.DataFrame(data)
+    @st.cache_data
+    def fetch_youtube_data(keywords, limit=5):
+        """MOCKUP: Simula a busca de dados no YouTube."""
+        st.info(f"⚙️ Buscando no YouTube por: **{keywords}** (MOCKUP)")
+        time.sleep(1)
+        data = []
+        for i in range(limit):
+            data.append({
+                'Fonte': 'YouTube',
+                'Canal': f"CanalGaming_{i+1}",
+                'Vídeo': f"Gameplay de {keywords[0]} - Novo Lançamento",
+                'Visualizações': 5000 + i*100,
+                'Link': 'URL_YouTube',
+                'Data': pd.Timestamp.now() - pd.Timedelta(weeks=i)
+            })
+        return pd.DataFrame(data)
 
-@st.cache_data
-def fetch_twitch_data(keywords, limit=5):
-    """MOCKUP: Simula a busca de dados na Twitch."""
-    st.info(f"⚙️ Buscando na Twitch por: **{keywords}** (MOCKUP)")
-    time.sleep(1)
-    data = []
-    for i in range(limit):
-        data.append({
-            'Fonte': 'Twitch',
-            'Streamer': f"StreamerPro_{i+1}",
-            'Título': f"Live: Jogando {keywords[0]}",
-            'Visualizadores': 800 + i*50,
-            'Link': 'URL_Twitch',
-            'Data': 'Ao Vivo' if i == 0 else 'Offline'
-        })
-    return pd.DataFrame(data)
+    @st.cache_data
+    def fetch_twitch_data(keywords, limit=5):
+        """MOCKUP: Simula a busca de dados na Twitch."""
+        st.info(f"⚙️ Buscando na Twitch por: **{keywords}** (MOCKUP)")
+        time.sleep(1)
+        data = []
+        for i in range(limit):
+            data.append({
+                'Fonte': 'Twitch',
+                'Streamer': f"StreamerPro_{i+1}",
+                'Título': f"Live: Jogando {keywords[0]}",
+                'Visualizadores': 800 + i*50,
+                'Link': 'URL_Twitch',
+                'Data': 'Ao Vivo' if i == 0 else 'Offline'
+            })
+        return pd.DataFrame(data)
 
 
 # --- 5. Lógica de Busca Principal ---
