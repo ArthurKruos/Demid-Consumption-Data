@@ -8,7 +8,7 @@ from PIL import Image
 
 # 1. Carrega a imagem
 # Certifique-se de que o nome do arquivo está exato (maiúsculas/minúsculas importam)
-im = Image.open(".streamlit\img\logodemid.jpg")
+im = Image.open(".streamlit/img/logodemid.jpg")
 
 # 2. Configura a página
 st.set_page_config(
