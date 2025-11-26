@@ -4,14 +4,19 @@ import time
 import tweepy # Para X/Twitter
 from getdata.redditdata import fetch_reddit_data
 from getdata.twitterdata import fetch_x_data # <--- NOVA IMPORTAÇÃO AQUI!
+from PIL import Image
 
-# --- 1. Credenciais e Configurações ---
+# 1. Carrega a imagem
+# Certifique-se de que o nome do arquivo está exato (maiúsculas/minúsculas importam)
+im = Image.open(".streamlit\img\logodemid.jpg")
 
+# 2. Configura a página
 st.set_page_config(
-    page_title="Game Community Data Extractor",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="Demid Consumption Data", # Título que aparece na aba do navegador
+    page_icon=im,                        # Sua logo carregada acima
+    layout="wide"                        # Opcional: deixa o app em modo "widescreen"
 )
+    
 
 st.title("🎮 Extrator de Dados da Comunidade de Jogos")
 st.markdown("Use o painel lateral para configurar sua busca de palavras-chave e inserir suas credenciais de API.")
