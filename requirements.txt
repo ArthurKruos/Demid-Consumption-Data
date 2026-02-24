@@ -2,3 +2,4 @@ pandas
 praw
 streamlit
 tweepy
+Pillow
