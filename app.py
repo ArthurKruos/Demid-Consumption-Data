@@ -191,6 +191,24 @@ else:
         st.markdown("---")
 
         # =========================
+        # DOWNLOAD DOS DADOS
+        # =========================
+
+        st.subheader("📥 Download dos Dados")
+        st.write("Tamanho da base:", df_completo.shape)
+
+        csv = df_completo.to_csv(index=False).encode("utf-8")
+
+        st.download_button(
+            label="⬇️ Baixar base completa do Diário Oficial (CSV)",
+            data=csv,
+            file_name="base_diario_oficial_pb.csv",
+            mime="text/csv"
+        )
+
+        st.markdown("---")  
+
+        # =========================
         # EVOLUÇÃO MENSAL
         # =========================
 
