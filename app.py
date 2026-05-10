@@ -7,6 +7,8 @@ import plotly.express as px
 from getdata.reddit_collector import fetch_reddit_data
 from getdata.youtube_collector import fetch_youtube_data
 from analise_games_diario import processar_parquet, evolucao_termos
+from ner_pipeline import extrair_entidades
+from collections import Counter
 
 
 # ==========================================================
@@ -151,7 +153,7 @@ if modo_app == "Reddit + YouTube":
 
             else:
                 st.warning("Nenhum dado encontrado.")
-
+                
 # ==========================================================
 # MÓDULO DIÁRIO OFICIAL
 # ==========================================================
@@ -162,39 +164,126 @@ else:
 
     PARQUET_PATH = "data/doe_raw.parquet"
 
+    # ==========================================================
+    # CACHE NER
+    # ==========================================================
+
+    @st.cache_data(show_spinner=False)
+    def processar_ner(textos):
+
+        entidades_lista = []
+
+        for texto in textos:
+
+            entidades = extrair_entidades(texto)
+
+            entidades_lista.append(entidades)
+
+        return entidades_lista
+
     try:
 
+        # ==========================================================
+        # PROCESSAMENTO BASE
+        # ==========================================================
+
         with st.spinner("Processando base do Diário Oficial..."):
-            resultados = processar_parquet(PARQUET_PATH, salvar_csv=False)
+
+            resultados = processar_parquet(
+                PARQUET_PATH,
+                salvar_csv=False
+            )
 
         df_completo = resultados["df_completo"]
         resumo_anual = resultados["resumo_anual"]
         resumo_mensal = resultados["resumo_mensal"]
         top_diarios = resultados["top_diarios"]
 
-        # =========================
-        # CARDS
-        # =========================
+        # ==========================================================
+        # VALIDAÇÃO
+        # ==========================================================
+
+        if "conteudo" not in df_completo.columns:
+
+            st.error("Coluna 'conteudo' não encontrada.")
+
+            st.stop()
+
+        # ==========================================================
+        # LIMITE NER
+        # ==========================================================
+
+        LIMITE_NER = 200
+
+        df_ner = df_completo.head(LIMITE_NER).copy()
+
+        # ==========================================================
+        # NER
+        # ==========================================================
+
+        with st.spinner("Extraindo entidades do Diário Oficial..."):
+
+            textos = df_ner["conteudo"].fillna("").tolist()
+
+            entidades_lista = processar_ner(textos)
+
+        df_ner["entidades"] = entidades_lista
+
+        # ==========================================================
+        # ORGANIZAÇÃO DAS ENTIDADES
+        # ==========================================================
+
+        df_ner["orgs"] = df_ner["entidades"].apply(
+            lambda x: x.get("ORG", [])
+        )
+
+        df_ner["pessoas"] = df_ner["entidades"].apply(
+            lambda x: x.get("PER", []) + x.get("PERSON", [])
+        )
+
+        df_ner["locais"] = df_ner["entidades"].apply(
+            lambda x: x.get("LOC", [])
+        )
+
+        # ==========================================================
+        # SALVAR PARQUET ENRIQUECIDO
+        # ==========================================================
+
+        df_ner.to_parquet(
+            "data/doe_ner.parquet",
+            index=False
+        )
+
+        # ==========================================================
+        # MÉTRICAS
+        # ==========================================================
 
         total_diarios = len(df_completo)
+
         total_games = df_completo["flag_games"].sum()
+
         total_seguranca = df_completo["flag_seguranca"].sum()
+
         intensidade_total = df_completo["score_games"].sum()
 
         col1, col2, col3, col4 = st.columns(4)
 
         col1.metric("📄 Total de Diários", total_diarios)
+
         col2.metric("🎮 Diários com Games", total_games)
+
         col3.metric("🔐 Diários com Segurança", total_seguranca)
+
         col4.metric("🔥 Intensidade Total Games", intensidade_total)
 
         st.markdown("---")
 
-        # =========================
-        # DOWNLOAD DOS DADOS
-        # =========================
+        # ==========================================================
+        # DOWNLOAD
+        # ==========================================================
 
         st.subheader("📥 Download dos Dados")
+
         st.write("Tamanho da base:", df_completo.shape)
 
         csv = df_completo.to_csv(index=False).encode("utf-8")
@@ -206,11 +295,11 @@ else:
             mime="text/csv"
         )
 
-        st.markdown("---")  
+        st.markdown("---")
 
-        # =========================
+        # ==========================================================
         # EVOLUÇÃO MENSAL
-        # =========================
+        # ==========================================================
 
         st.subheader("📈 Evolução Mensal – Intensidade Games")
 
@@ -221,11 +310,14 @@ else:
             markers=True
         )
 
-        st.plotly_chart(fig_mensal, use_container_width=True)
+        st.plotly_chart(
+            fig_mensal,
+            use_container_width=True
+        )
 
-        # =========================
+        # ==========================================================
         # EVOLUÇÃO ANUAL
-        # =========================
+        # ==========================================================
 
         st.subheader("📊 Evolução Anual – Diários com Games")
 
@@ -235,18 +327,73 @@ else:
             y="diarios_com_games"
         )
 
-        st.plotly_chart(fig_anual, use_container_width=True)
+        st.plotly_chart(
+            fig_anual,
+            use_container_width=True
+        )
 
-        # =========================
+        # ==========================================================
         # TOP DIÁRIOS
-        # =========================
+        # ==========================================================
 
         st.subheader("🏆 Top 20 Diários mais relevantes")
-        st.dataframe(top_diarios, use_container_width=True)
 
-        # =========================
+        st.dataframe(
+            top_diarios,
+            use_container_width=True
+        )
+
+        # ==========================================================
+        # TOP ÓRGÃOS
+        # ==========================================================
+
+        todas_orgs = []
+
+        for lista in df_ner["orgs"]:
+
+            todas_orgs.extend(lista)
+
+        freq_orgs = Counter(todas_orgs)
+
+        top_orgs = pd.DataFrame(
+            freq_orgs.most_common(15),
+            columns=["orgao", "frequencia"]
+        )
+
+        st.subheader("🏢 Top Órgãos Citados")
+
+        fig_orgs = px.bar(
+            top_orgs,
+            x="orgao",
+            y="frequencia"
+        )
+
+        st.plotly_chart(
+            fig_orgs,
+            use_container_width=True
+        )
+
+        # ==========================================================
+        # ENTIDADES EXTRAÍDAS
+        # ==========================================================
+
+        st.subheader("🏛️ Entidades Extraídas")
+
+        st.data_editor(
+            df_ner[
+                [
+                    "data_doe",
+                    "orgs",
+                    "pessoas",
+                    "locais"
+                ]
+            ],
+            use_container_width=True
+        )
+
+        # ==========================================================
         # EVOLUÇÃO DE TERMOS
-        # =========================
+        # ==========================================================
 
         st.subheader("🔎 Evolução de Termos")
 
@@ -257,8 +404,16 @@ else:
 
         if termos_input:
 
-            termos_lista = [t.strip() for t in termos_input.split(",") if t.strip()]
-            df_evolucao = evolucao_termos(termos_lista, df_completo)
+            termos_lista = [
+                t.strip()
+                for t in termos_input.split(",")
+                if t.strip()
+            ]
+
+            df_evolucao = evolucao_termos(
+                termos_lista,
+                df_completo
+            )
 
             fig_termos = px.line(
                 df_evolucao,
@@ -267,9 +422,15 @@ else:
                 markers=True
             )
 
-            st.plotly_chart(fig_termos, use_container_width=True)
+            st.plotly_chart(
+                fig_termos,
+                use_container_width=True
+            )
 
     except FileNotFoundError:
+
         st.error("Arquivo doe_raw.parquet não encontrado.")
+
     except Exception as e:
+
         st.error(f"Erro ao processar painel: {e}")
