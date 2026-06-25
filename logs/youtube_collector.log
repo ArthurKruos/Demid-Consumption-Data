@@ -1,15 +1,4 @@
-2026-05-09 15:38:13,792 - ERROR - Exception in callback _ProactorBasePipeTransport._call_connection_lost()
-handle: <Handle _ProactorBasePipeTransport._call_connection_lost()>
-Traceback (most recent call last):
-  File "C:\Program Files\Python313\Lib\asyncio\events.py", line 89, in _run
-    self._context.run(self._callback, *self._args)
-    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
-    self._sock.shutdown(socket.SHUT_RDWR)
-    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
-ConnectionResetError: [WinError 10054] Foi for�ado o cancelamento de uma conex�o existente pelo host remoto
-2026-06-10 19:57:19,784 - INFO - libssl detected, it will be used for encryption
-2026-06-16 06:46:16,967 - INFO - libssl detected, it will be used for encryption
+2026-06-16 06:42:53,797 - INFO - Canal 'Tolarian Community College' | vídeos=3 | comentários=0
 2026-06-16 06:46:37,937 - ERROR - Erro ao listar canal https://www.youtube.com/@ChiefMilGrauXbox: 'NoneType' object has no attribute 'get'
 2026-06-16 06:48:39,300 - INFO - Canal 'RADECK' | vídeos=20 | comentários=1089
 2026-06-16 06:50:51,452 - INFO - Canal 'Warlock' | vídeos=20 | comentários=141

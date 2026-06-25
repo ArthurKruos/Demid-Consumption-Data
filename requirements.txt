@@ -3,7 +3,10 @@ pandas
 numpy
 pyarrow
 praw
+yt-dlp
 google-api-python-client
+tweepy
+telethon
 requests
 beautifulsoup4
 pdfplumber

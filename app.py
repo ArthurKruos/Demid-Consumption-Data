@@ -5,10 +5,18 @@ from PIL import Image
 import plotly.express as px
 
 from getdata.reddit_collector import fetch_reddit_data
-from getdata.youtube_collector import fetch_youtube_data
+from getdata.youtube_collector import (
+    fetch_youtube_data,
+    fetch_pibic_data,
+    exportar_maxqda,
+)
+from getdata.twitter_collector import fetch_twitter_data
+from getdata.telegram_collector import fetch_telegram_data
+from config.canais_pibic import CANAIS_PIBIC, VIDEOS_AVULSOS, listar_categorias
 from analise_games_diario import processar_parquet, evolucao_termos
 from ner_pipeline import extrair_entidades
 from collections import Counter
+import os
 
 
 # ==========================================================
@@ -29,14 +37,14 @@ st.set_page_config(
 
 modo_app = st.sidebar.radio(
     "Escolha o módulo:",
-    ["Reddit + YouTube", "Diário Oficial"]
+    ["Redes Sociais", "Mapeamento PIBIC", "Diário Oficial"]
 )
 
 # ==========================================================
 # MÓDULO REDES SOCIAIS
 # ==========================================================
 
-if modo_app == "Reddit + YouTube":
+if modo_app == "Redes Sociais":
 
     st.title("🎮 Coletor de Dados – Comunidades Gamer")
     st.markdown("Configure as palavras-chave e credenciais na barra lateral.")
@@ -56,6 +64,8 @@ if modo_app == "Reddit + YouTube":
     st.sidebar.subheader("🌐 Fontes")
     use_reddit = st.sidebar.checkbox("Reddit", value=True)
     use_youtube = st.sidebar.checkbox("YouTube", value=True)
+    use_twitter = st.sidebar.checkbox("Twitter/X", value=False)
+    use_telegram = st.sidebar.checkbox("Telegram", value=False)
 
     # -------------------------
     # CREDENCIAIS REDDIT
@@ -71,9 +81,43 @@ if modo_app == "Reddit + YouTube":
     # CREDENCIAIS YOUTUBE
     # -------------------------
 
-    st.sidebar.subheader("📺 Credenciais YouTube")
+    st.sidebar.subheader("📺 YouTube")
+    st.sidebar.caption("✅ Funciona sem chave (yt-dlp). API Key é opcional.")
+    YOUTUBE_API_KEY = st.sidebar.text_input(
+        "YouTube API Key (opcional)", type="password",
+        help="Só necessária como fallback se yt-dlp falhar."
+    )
+    yt_get_comments = st.sidebar.checkbox("Coletar comentários", value=True)
+    yt_max_comments = st.sidebar.slider("Comentários por vídeo", 10, 300, 100, step=10)
 
-    YOUTUBE_API_KEY = st.sidebar.text_input("YouTube API Key", type="password")
+    # -------------------------
+    # CREDENCIAIS TWITTER/X
+    # -------------------------
+
+    if use_twitter:
+        st.sidebar.subheader("🐦 Credenciais Twitter/X")
+        TWITTER_BEARER = st.sidebar.text_input("Bearer Token", type="password")
+        st.sidebar.caption("Plano gratuito: até 10 tweets por busca.")
+    else:
+        TWITTER_BEARER = ""
+
+    # -------------------------
+    # CREDENCIAIS TELEGRAM
+    # -------------------------
+
+    if use_telegram:
+        st.sidebar.subheader("✈️ Credenciais Telegram")
+        TELEGRAM_API_ID = st.sidebar.text_input("API ID", type="password")
+        TELEGRAM_API_HASH = st.sidebar.text_input("API Hash", type="password")
+        telegram_channels_input = st.sidebar.text_input(
+            "Canais públicos (sem @, separados por vírgula)",
+            "gamesbrasileiros,jogosindiesbr"
+        )
+        st.sidebar.caption("Apenas canais/grupos públicos. Obtenha credenciais em my.telegram.org")
+    else:
+        TELEGRAM_API_ID = ""
+        TELEGRAM_API_HASH = ""
+        telegram_channels_input = ""
 
     search_button = st.sidebar.button("🚀 Iniciar Coleta")
 
@@ -118,14 +162,50 @@ if modo_app == "Reddit + YouTube":
                 if use_youtube:
 
                     df_youtube = fetch_youtube_data(
-                        api_key=YOUTUBE_API_KEY,
                         keywords=keywords,
-                        max_results=50
+                        max_results=20,
+                        get_comments=yt_get_comments,
+                        max_comments=yt_max_comments,
+                        api_key=YOUTUBE_API_KEY,
                     )
 
                     if not df_youtube.empty:
-                        df_youtube.to_parquet("data/youtube_raw.parquet", index=False)
                         all_results.append(df_youtube)
+
+                # =========================
+                # TWITTER/X
+                # =========================
+                if use_twitter:
+                    df_twitter = fetch_twitter_data(
+                        bearer_token=TWITTER_BEARER,
+                        keywords=keywords,
+                        limit=10
+                    )
+                    if not df_twitter.empty:
+                        all_results.append(df_twitter)
+                    else:
+                        st.warning("Twitter/X: nenhum tweet encontrado ou credenciais inválidas.")
+
+                # =========================
+                # TELEGRAM
+                # =========================
+                if use_telegram:
+                    channels = [
+                        c.strip().lstrip("@")
+                        for c in telegram_channels_input.split(",")
+                        if c.strip()
+                    ]
+                    df_telegram, err = fetch_telegram_data(
+                        api_id=TELEGRAM_API_ID,
+                        api_hash=TELEGRAM_API_HASH,
+                        channels=channels,
+                        keywords=keywords,
+                        limit=200
+                    )
+                    if err:
+                        st.warning(f"Telegram: {err}")
+                    elif not df_telegram.empty:
+                        all_results.append(df_telegram)
 
             # =========================
             # RESULTADO FINAL
@@ -153,7 +233,166 @@ if modo_app == "Reddit + YouTube":
 
             else:
                 st.warning("Nenhum dado encontrado.")
-                
+
+# ==========================================================
+# MÓDULO MAPEAMENTO PIBIC
+# ==========================================================
+
+elif modo_app == "Mapeamento PIBIC":
+
+    st.title("🔬 Mapeamento PIBIC – Comunidades Gamer")
+    st.markdown(
+        "Coleta dirigida dos **canais selecionados** para o projeto de iniciação "
+        "científica. Os dados alimentam a análise de conteúdo (MAXQDA)."
+    )
+
+    st.info(
+        "ℹ️ **Nota metodológica:** os rótulos de categoria refletem a hipótese de "
+        "pesquisa do documento de origem, não uma classificação validada. A "
+        "caracterização ideológica é resultado da análise de conteúdo, não um "
+        "pressuposto da coleta."
+    )
+
+    PIBIC_VIDEOS_PATH = "data/pibic_videos.parquet"
+    PIBIC_COMMENTS_PATH = "data/pibic_comments.parquet"
+
+    # -------------------------
+    # SIDEBAR
+    # -------------------------
+    st.sidebar.header("⚙️ Coleta PIBIC")
+
+    categorias = listar_categorias()
+    cats_sel = st.sidebar.multiselect(
+        "Categorias a coletar", categorias, default=categorias
+    )
+
+    max_videos = st.sidebar.slider("Vídeos por canal", 5, 100, 20, step=5)
+    pibic_comments = st.sidebar.checkbox("Coletar comentários", value=True)
+    pibic_max_comments = st.sidebar.slider("Comentários por vídeo", 10, 300, 100, step=10)
+    incluir_avulsos = st.sidebar.checkbox("Incluir vídeos avulsos do documento", value=True)
+
+    canais_filtrados = [c for c in CANAIS_PIBIC if c["categoria"] in cats_sel]
+
+    st.subheader("📋 Canais selecionados")
+    st.dataframe(
+        pd.DataFrame(canais_filtrados),
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.caption(f"{len(canais_filtrados)} canais nas categorias escolhidas.")
+
+    coletar_btn = st.sidebar.button("🚀 Iniciar Coleta PIBIC")
+
+    # -------------------------
+    # EXECUÇÃO
+    # -------------------------
+    if coletar_btn:
+
+        if not canais_filtrados:
+            st.error("Selecione ao menos uma categoria.")
+        else:
+            progress_bar = st.progress(0.0, text="Iniciando coleta...")
+
+            def _cb(idx, total, nome):
+                progress_bar.progress(
+                    min(idx / total, 1.0),
+                    text=f"Coletando {idx}/{total}: {nome}",
+                )
+
+            avulsos = VIDEOS_AVULSOS if incluir_avulsos else None
+            # Só inclui avulsos cuja categoria foi selecionada
+            if avulsos:
+                avulsos = [v for v in avulsos if v["categoria"] in cats_sel]
+
+            with st.spinner("Coletando dados do YouTube (yt-dlp, sem cota)..."):
+                resultado = fetch_pibic_data(
+                    canais=canais_filtrados,
+                    max_videos=max_videos,
+                    get_comments=pibic_comments,
+                    max_comments=pibic_max_comments,
+                    videos_avulsos=avulsos,
+                    progress_callback=_cb,
+                )
+
+            progress_bar.progress(1.0, text="Coleta concluída!")
+
+            df_v = resultado["videos"]
+            df_c = resultado["comments"]
+
+            st.success(
+                f"Coleta concluída: {len(df_v)} vídeos e {len(df_c)} comentários."
+            )
+
+    # -------------------------
+    # PAINEL DOS DADOS JÁ COLETADOS
+    # -------------------------
+    st.markdown("---")
+    st.subheader("📊 Base PIBIC acumulada")
+
+    if os.path.exists(PIBIC_VIDEOS_PATH):
+        df_v = pd.read_parquet(PIBIC_VIDEOS_PATH)
+        df_c = (
+            pd.read_parquet(PIBIC_COMMENTS_PATH)
+            if os.path.exists(PIBIC_COMMENTS_PATH)
+            else pd.DataFrame()
+        )
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("🎬 Vídeos coletados", len(df_v))
+        col2.metric("💬 Comentários coletados", len(df_c))
+        col3.metric("📺 Canais", df_v["canal_origem"].nunique())
+
+        st.markdown("#### Vídeos por categoria")
+        if "categoria_pibic" in df_v.columns:
+            por_cat = (
+                df_v["categoria_pibic"]
+                .value_counts()
+                .rename_axis("Categoria")
+                .to_frame("Vídeos")
+            )
+            st.bar_chart(por_cat)
+
+        st.markdown("#### Amostra de vídeos")
+        cols_show = [
+            c for c in ["categoria_pibic", "channel", "title", "view_count", "comment_count", "url"]
+            if c in df_v.columns
+        ]
+        st.dataframe(df_v[cols_show], use_container_width=True, hide_index=True)
+
+        # -------------------------
+        # EXPORTAÇÃO MAXQDA
+        # -------------------------
+        st.markdown("---")
+        st.subheader("📤 Exportar para análise de conteúdo (MAXQDA)")
+        st.caption(
+            "Gera um CSV estruturado: uma linha = um documento (vídeo ou comentário), "
+            "com variáveis de canal, categoria, autor, data e engajamento."
+        )
+
+        df_maxqda = exportar_maxqda(df_v, df_c)
+        st.write(f"Total de documentos para análise: **{len(df_maxqda)}**")
+
+        csv_maxqda = df_maxqda.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            label="⬇️ Baixar CSV para MAXQDA",
+            data=csv_maxqda,
+            file_name=f"pibic_maxqda_{time.strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+        )
+
+        parquet_v = df_v.to_parquet(index=False)
+        st.download_button(
+            label="⬇️ Baixar vídeos (Parquet)",
+            data=parquet_v,
+            file_name="pibic_videos.parquet",
+            mime="application/octet-stream",
+        )
+    else:
+        st.warning(
+            "Nenhuma coleta realizada ainda. Configure as categorias na barra "
+            "lateral e clique em **Iniciar Coleta PIBIC**."
+        )
+
 # ==========================================================
 # MÓDULO DIÁRIO OFICIAL
 # ==========================================================
