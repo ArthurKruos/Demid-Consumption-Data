@@ -13,6 +13,7 @@ from getdata.youtube_collector import (
 from getdata.twitter_collector import fetch_twitter_data
 from getdata.telegram_collector import fetch_telegram_data
 from config.canais_pibic import CANAIS_PIBIC, VIDEOS_AVULSOS, listar_categorias
+import analise_youtube as ay
 from analise_games_diario import processar_parquet, evolucao_termos
 from ner_pipeline import extrair_entidades
 from collections import Counter
@@ -327,9 +328,13 @@ elif modo_app == "Mapeamento PIBIC":
     # PAINEL DOS DADOS JÁ COLETADOS
     # -------------------------
     st.markdown("---")
-    st.subheader("📊 Base PIBIC acumulada")
 
-    if os.path.exists(PIBIC_VIDEOS_PATH):
+    if not os.path.exists(PIBIC_VIDEOS_PATH):
+        st.warning(
+            "Nenhuma coleta realizada ainda. Configure as categorias na barra "
+            "lateral e clique em **Iniciar Coleta PIBIC**."
+        )
+    else:
         df_v = pd.read_parquet(PIBIC_VIDEOS_PATH)
         df_c = (
             pd.read_parquet(PIBIC_COMMENTS_PATH)
@@ -337,61 +342,176 @@ elif modo_app == "Mapeamento PIBIC":
             else pd.DataFrame()
         )
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("🎬 Vídeos coletados", len(df_v))
-        col2.metric("💬 Comentários coletados", len(df_c))
-        col3.metric("📺 Canais", df_v["canal_origem"].nunique())
+        tab_vg, tab_pub, tab_rede, tab_disc, tab_lex, tab_exp = st.tabs([
+            "📊 Visão geral",
+            "👥 Público-alvo",
+            "🕸️ Mapa de comunidades",
+            "🗣️ Discurso (termos & KWIC)",
+            "🔍 Marcadores",
+            "📤 Exportar",
+        ])
 
-        st.markdown("#### Vídeos por categoria")
-        if "categoria_pibic" in df_v.columns:
-            por_cat = (
-                df_v["categoria_pibic"]
-                .value_counts()
-                .rename_axis("Categoria")
-                .to_frame("Vídeos")
+        # ===== VISÃO GERAL =====
+        with tab_vg:
+            col1, col2, col3 = st.columns(3)
+            col1.metric("🎬 Vídeos", len(df_v))
+            col2.metric("💬 Comentários", len(df_c))
+            col3.metric("📺 Canais", df_v["canal_origem"].nunique())
+
+            if "categoria_pibic" in df_v.columns:
+                st.markdown("#### Vídeos por categoria")
+                st.bar_chart(
+                    df_v["categoria_pibic"].value_counts()
+                    .rename_axis("Categoria").to_frame("Vídeos")
+                )
+
+            st.markdown("#### Amostra de vídeos")
+            cols_show = [
+                c for c in ["categoria_pibic", "channel", "title", "view_count",
+                            "comment_count", "url"] if c in df_v.columns
+            ]
+            st.dataframe(df_v[cols_show], use_container_width=True, hide_index=True)
+
+        # ===== PÚBLICO-ALVO =====
+        with tab_pub:
+            st.markdown("#### Núcleo engajado (comentaristas mais ativos)")
+            st.caption(
+                "Autores recorrentes são proxy do núcleo de cada comunidade. "
+                "A coluna *canais_distintos* indica quem circula entre comunidades."
             )
-            st.bar_chart(por_cat)
+            st.dataframe(
+                ay.top_comentaristas(df_c, 30),
+                use_container_width=True, hide_index=True
+            )
 
-        st.markdown("#### Amostra de vídeos")
-        cols_show = [
-            c for c in ["categoria_pibic", "channel", "title", "view_count", "comment_count", "url"]
-            if c in df_v.columns
-        ]
-        st.dataframe(df_v[cols_show], use_container_width=True, hide_index=True)
+            st.markdown("#### Perfil de engajamento por categoria")
+            perfil = ay.perfil_engajamento(df_v, df_c)
+            if not perfil.empty:
+                st.dataframe(perfil, use_container_width=True, hide_index=True)
+                st.caption(
+                    "*comentarios_por_autor* alto sugere comunidade mais concentrada "
+                    "e participativa; baixo sugere audiência mais dispersa."
+                )
 
-        # -------------------------
-        # EXPORTAÇÃO MAXQDA
-        # -------------------------
-        st.markdown("---")
-        st.subheader("📤 Exportar para análise de conteúdo (MAXQDA)")
-        st.caption(
-            "Gera um CSV estruturado: uma linha = um documento (vídeo ou comentário), "
-            "com variáveis de canal, categoria, autor, data e engajamento."
-        )
+        # ===== MAPA DE COMUNIDADES =====
+        with tab_rede:
+            st.markdown("#### Rede de comunidades por público compartilhado")
+            st.caption(
+                "Dois canais se conectam quando têm comentaristas em comum. "
+                "Revela empiricamente quais comunidades se sobrepõem — peça central "
+                "do mapeamento do PIBIC."
+            )
+            with st.spinner("Construindo rede..."):
+                rede = ay.rede_canais(df_c)
 
-        df_maxqda = exportar_maxqda(df_v, df_c)
-        st.write(f"Total de documentos para análise: **{len(df_maxqda)}**")
+            fig_rede = ay.grafo_para_plotly(rede["grafo"])
+            if fig_rede is not None:
+                st.plotly_chart(fig_rede, use_container_width=True)
 
-        csv_maxqda = df_maxqda.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            label="⬇️ Baixar CSV para MAXQDA",
-            data=csv_maxqda,
-            file_name=f"pibic_maxqda_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-        )
+            colA, colB = st.columns(2)
+            with colA:
+                st.markdown("**Canais mais centrais**")
+                st.dataframe(rede["metricas"], use_container_width=True, hide_index=True)
+            with colB:
+                st.markdown("**Ligações mais fortes**")
+                st.dataframe(rede["edges"], use_container_width=True, hide_index=True)
 
-        parquet_v = df_v.to_parquet(index=False)
-        st.download_button(
-            label="⬇️ Baixar vídeos (Parquet)",
-            data=parquet_v,
-            file_name="pibic_videos.parquet",
-            mime="application/octet-stream",
-        )
-    else:
-        st.warning(
-            "Nenhuma coleta realizada ainda. Configure as categorias na barra "
-            "lateral e clique em **Iniciar Coleta PIBIC**."
-        )
+            st.markdown(f"**Autores-ponte** (comentam em ≥2 canais): {len(rede['bridges'])}")
+            st.dataframe(rede["bridges"].head(50), use_container_width=True, hide_index=True)
+
+        # ===== DISCURSO: TERMOS & KWIC =====
+        with tab_disc:
+            st.markdown("#### Repertório linguístico")
+            cat_opts = ["(todas)"] + (
+                sorted(df_c["categoria_pibic"].dropna().unique())
+                if "categoria_pibic" in df_c.columns else []
+            )
+            cat_sel = st.selectbox("Filtrar por categoria", cat_opts)
+            df_filt = (
+                df_c if cat_sel == "(todas)"
+                else df_c[df_c["categoria_pibic"] == cat_sel]
+            )
+
+            colT, colN = st.columns(2)
+            with colT:
+                st.markdown("**Top termos**")
+                st.dataframe(
+                    ay.frequencia_termos(df_filt, 30),
+                    use_container_width=True, hide_index=True
+                )
+            with colN:
+                grau_n = st.radio("N-grama", [2, 3], horizontal=True,
+                                  format_func=lambda x: "Bigramas" if x == 2 else "Trigramas")
+                st.dataframe(
+                    ay.ngramas(df_filt, n=grau_n, top_n=30),
+                    use_container_width=True, hide_index=True
+                )
+
+            st.markdown("---")
+            st.markdown("#### Concordância (KWIC) — termo em contexto")
+            st.caption(
+                "Ferramenta de análise de discurso: localiza um termo e mostra as "
+                "palavras ao redor, para leitura qualitativa do uso."
+            )
+            termo_kwic = st.text_input("Termo para concordância", "woke")
+            if termo_kwic:
+                kwic = ay.concordancia_kwic(df_filt, termo_kwic, janela=8, max_resultados=200)
+                st.write(f"Ocorrências encontradas: **{len(kwic)}**")
+                st.dataframe(kwic, use_container_width=True, hide_index=True)
+
+        # ===== MARCADORES (LÉXICO) =====
+        with tab_lex:
+            st.markdown("#### Léxico exploratório de marcadores discursivos")
+            st.warning(
+                "⚠️ **Exploratório, não classificatório.** O léxico apenas localiza "
+                "ocorrências de termos para inspeção qualitativa. Não rotula "
+                "ideologicamente — a interpretação é do pesquisador, idealmente no MAXQDA."
+            )
+            with st.spinner("Aplicando léxico..."):
+                lex = ay.score_lexico(df_c)
+
+            colE, colTr = st.columns(2)
+            with colE:
+                st.markdown("**Ocorrências por eixo**")
+                st.dataframe(lex["resumo_eixos"], use_container_width=True, hide_index=True)
+            with colTr:
+                st.markdown("**Termos encontrados**")
+                st.dataframe(lex["resumo_termos"].head(25),
+                             use_container_width=True, hide_index=True)
+
+            if not lex["por_categoria"].empty:
+                st.markdown("**Marcadores por categoria**")
+                st.dataframe(lex["por_categoria"], use_container_width=True, hide_index=True)
+
+            st.markdown("#### Comentários mais marcados (para leitura qualitativa)")
+            st.dataframe(
+                ay.comentarios_mais_marcados(lex["por_comentario"], 40),
+                use_container_width=True, hide_index=True
+            )
+
+        # ===== EXPORTAR =====
+        with tab_exp:
+            st.markdown("#### Exportar para análise de conteúdo (MAXQDA)")
+            st.caption(
+                "CSV estruturado: uma linha = um documento (vídeo ou comentário), "
+                "com variáveis de canal, categoria, autor, data e engajamento."
+            )
+            df_maxqda = exportar_maxqda(df_v, df_c)
+            st.write(f"Total de documentos para análise: **{len(df_maxqda)}**")
+
+            csv_maxqda = df_maxqda.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                "⬇️ Baixar CSV para MAXQDA",
+                data=csv_maxqda,
+                file_name=f"pibic_maxqda_{time.strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
+            st.download_button(
+                "⬇️ Baixar comentários (Parquet)",
+                data=df_c.to_parquet(index=False),
+                file_name="pibic_comments.parquet",
+                mime="application/octet-stream",
+            )
 
 # ==========================================================
 # MÓDULO DIÁRIO OFICIAL
