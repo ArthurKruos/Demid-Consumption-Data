@@ -2,11 +2,19 @@
 
 **Projeto de Iniciação Científica — Universidade Federal da Paraíba (UFPB)**
 
-O DEMID é uma plataforma de pesquisa que combina coleta de dados de redes sociais com análise de documentos oficiais para:
+O DEMID é uma plataforma de pesquisa **focada no mapeamento e análise de comunidades gamers do YouTube**, com módulos complementares para outras fontes:
 
-- Mapear comunidades gamers em plataformas digitais (Reddit, YouTube, Twitter/X, Telegram)
+- ⭐ **Mapear comunidades gamers do YouTube** e analisar seu discurso (foco principal)
+- Mapeamento equivalente para Reddit (opcional, exige API)
 - Monitorar políticas públicas sobre jogos digitais via Diário Oficial da Paraíba
-- Identificar padrões discursivos em comunidades extremistas no contexto gaming em língua portuguesa
+- Identificar padrões discursivos no contexto gaming em língua portuguesa
+
+---
+
+## 📚 Documentação
+
+- **[Guia do Usuário](docs/DOCUMENTACAO_USUARIO.md)** — explica cada aba em linguagem simples, sem programação.
+- **[Documentação Técnica](docs/DOCUMENTACAO_TECNICA.md)** — arquitetura, fluxo de dados, esquema e como estender.
 
 ---
 
