@@ -1,17 +1,34 @@
 import re
 import unicodedata
+import logging
 import spacy
 
 from collections import defaultdict
 
 # =========================
-# CARREGAR MODELO
+# CARREGAR MODELO (preguiçoso e resiliente)
 # =========================
+# O modelo é carregado apenas na primeira chamada. Se não estiver
+# instalado, o NER degrada silenciosamente (retorna vazio) em vez de
+# derrubar a aplicação inteira no import.
 
-nlp = spacy.load(
-    "pt_core_news_lg",
-    disable=["parser", "tagger", "lemmatizer"]
-)
+_nlp = None
+_MODELO = "pt_core_news_lg"
+
+
+def _get_nlp():
+    global _nlp
+    if _nlp is None:
+        try:
+            _nlp = spacy.load(_MODELO, disable=["parser", "tagger", "lemmatizer"])
+        except OSError:
+            logging.error(
+                f"Modelo spaCy '{_MODELO}' não encontrado. "
+                "Instale com: python -m spacy download pt_core_news_lg "
+                "(ou inclua o wheel no requirements.txt)."
+            )
+            _nlp = False  # marca como indisponível para não tentar de novo
+    return _nlp
 
 # =========================
 # PADRÕES DE RUÍDO
@@ -73,6 +90,10 @@ def preprocessar_texto(texto, max_chars=50000):
 # =========================
 
 def extrair_entidades(texto):
+
+    nlp = _get_nlp()
+    if not nlp:  # modelo indisponível → degradação graciosa
+        return {}
 
     texto = preprocessar_texto(texto)
 
