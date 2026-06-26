@@ -4,7 +4,7 @@ import time
 from PIL import Image
 import plotly.express as px
 
-from getdata.reddit_collector import fetch_reddit_data
+from getdata.reddit_collector import fetch_reddit_data, fetch_reddit_pibic
 from getdata.youtube_collector import (
     fetch_youtube_data,
     fetch_pibic_data,
@@ -13,7 +13,12 @@ from getdata.youtube_collector import (
 from getdata.twitter_collector import fetch_twitter_data
 from getdata.telegram_collector import fetch_telegram_data
 from config.canais_pibic import CANAIS_PIBIC, VIDEOS_AVULSOS, listar_categorias
+from config.subreddits_pibic import (
+    SUBREDDITS_PIBIC,
+    listar_categorias as listar_categorias_reddit,
+)
 import analise_youtube as ay
+import painel_analise as painel
 from analise_games_diario import processar_parquet, evolucao_termos
 from ner_pipeline import extrair_entidades
 from collections import Counter
@@ -38,7 +43,12 @@ st.set_page_config(
 
 modo_app = st.sidebar.radio(
     "Escolha o módulo:",
-    ["Redes Sociais", "Mapeamento PIBIC", "Diário Oficial"]
+    [
+        "Mapeamento YouTube",
+        "Mapeamento Reddit (opcional)",
+        "Redes Sociais (coleta)",
+        "Diário Oficial",
+    ],
 )
 
 # ==========================================================
@@ -239,19 +249,18 @@ if modo_app == "Redes Sociais":
 # MÓDULO MAPEAMENTO PIBIC
 # ==========================================================
 
-elif modo_app == "Mapeamento PIBIC":
+elif modo_app == "Mapeamento YouTube":
 
-    st.title("🔬 Mapeamento PIBIC – Comunidades Gamer")
+    st.title("🔬 Mapeamento YouTube – Comunidades")
     st.markdown(
-        "Coleta dirigida dos **canais selecionados** para o projeto de iniciação "
-        "científica. Os dados alimentam a análise de conteúdo (MAXQDA)."
+        "Coleta dirigida de **canais do YouTube** para mapeamento de comunidades "
+        "e análise de discurso. Os dados alimentam a análise de conteúdo (MAXQDA)."
     )
 
     st.info(
-        "ℹ️ **Nota metodológica:** os rótulos de categoria refletem a hipótese de "
-        "pesquisa do documento de origem, não uma classificação validada. A "
-        "caracterização ideológica é resultado da análise de conteúdo, não um "
-        "pressuposto da coleta."
+        "ℹ️ **Nota metodológica:** os rótulos de categoria são organizacionais, "
+        "não classificações validadas. A caracterização ideológica é resultado da "
+        "análise de conteúdo, não um pressuposto da coleta."
     )
 
     PIBIC_VIDEOS_PATH = "data/pibic_videos.parquet"
@@ -260,48 +269,66 @@ elif modo_app == "Mapeamento PIBIC":
     # -------------------------
     # SIDEBAR
     # -------------------------
-    st.sidebar.header("⚙️ Coleta PIBIC")
+    st.sidebar.header("⚙️ Coleta YouTube")
+
+    fonte_canais = st.sidebar.radio(
+        "Fonte dos canais",
+        ["Lista curada (PIBIC)", "Digitar meus canais"],
+    )
 
     categorias = listar_categorias()
-    cats_sel = st.sidebar.multiselect(
-        "Categorias a coletar", categorias, default=categorias
-    )
+
+    if fonte_canais == "Lista curada (PIBIC)":
+        cats_sel = st.sidebar.multiselect(
+            "Categorias a coletar", categorias, default=categorias
+        )
+        canais_filtrados = [c for c in CANAIS_PIBIC if c["categoria"] in cats_sel]
+        incluir_avulsos = st.sidebar.checkbox("Incluir vídeos avulsos do documento", value=True)
+    else:
+        st.sidebar.markdown("**Canais personalizados**")
+        st.sidebar.caption("Um por linha. Formato: `URL_ou_@handle | categoria`")
+        canais_txt = st.sidebar.text_area(
+            "Canais",
+            "https://www.youtube.com/@TolarianCommunityCollege | Magic\nhttps://www.youtube.com/@AsmonTV | Streamer",
+            height=120,
+        )
+        canais_filtrados = []
+        for linha in canais_txt.splitlines():
+            linha = linha.strip()
+            if not linha:
+                continue
+            if "|" in linha:
+                url, cat = linha.split("|", 1)
+                canais_filtrados.append({"url": url.strip(), "categoria": cat.strip()})
+            else:
+                canais_filtrados.append({"url": linha, "categoria": "Personalizado"})
+        cats_sel = list({c["categoria"] for c in canais_filtrados})
+        incluir_avulsos = False
 
     max_videos = st.sidebar.slider("Vídeos por canal", 5, 100, 20, step=5)
     pibic_comments = st.sidebar.checkbox("Coletar comentários", value=True)
     pibic_max_comments = st.sidebar.slider("Comentários por vídeo", 10, 300, 100, step=10)
-    incluir_avulsos = st.sidebar.checkbox("Incluir vídeos avulsos do documento", value=True)
-
-    canais_filtrados = [c for c in CANAIS_PIBIC if c["categoria"] in cats_sel]
 
     st.subheader("📋 Canais selecionados")
-    st.dataframe(
-        pd.DataFrame(canais_filtrados),
-        use_container_width=True,
-        hide_index=True,
-    )
-    st.caption(f"{len(canais_filtrados)} canais nas categorias escolhidas.")
+    st.dataframe(pd.DataFrame(canais_filtrados), use_container_width=True, hide_index=True)
+    st.caption(f"{len(canais_filtrados)} canais a coletar.")
 
-    coletar_btn = st.sidebar.button("🚀 Iniciar Coleta PIBIC")
+    coletar_btn = st.sidebar.button("🚀 Iniciar Coleta")
 
     # -------------------------
     # EXECUÇÃO
     # -------------------------
     if coletar_btn:
-
         if not canais_filtrados:
-            st.error("Selecione ao menos uma categoria.")
+            st.error("Defina ao menos um canal.")
         else:
             progress_bar = st.progress(0.0, text="Iniciando coleta...")
 
             def _cb(idx, total, nome):
-                progress_bar.progress(
-                    min(idx / total, 1.0),
-                    text=f"Coletando {idx}/{total}: {nome}",
-                )
+                progress_bar.progress(min(idx / total, 1.0),
+                                      text=f"Coletando {idx}/{total}: {nome}")
 
             avulsos = VIDEOS_AVULSOS if incluir_avulsos else None
-            # Só inclui avulsos cuja categoria foi selecionada
             if avulsos:
                 avulsos = [v for v in avulsos if v["categoria"] in cats_sel]
 
@@ -314,204 +341,153 @@ elif modo_app == "Mapeamento PIBIC":
                     videos_avulsos=avulsos,
                     progress_callback=_cb,
                 )
-
             progress_bar.progress(1.0, text="Coleta concluída!")
-
-            df_v = resultado["videos"]
-            df_c = resultado["comments"]
-
             st.success(
-                f"Coleta concluída: {len(df_v)} vídeos e {len(df_c)} comentários."
+                f"Coleta concluída: {len(resultado['videos'])} vídeos e "
+                f"{len(resultado['comments'])} comentários."
             )
 
     # -------------------------
-    # PAINEL DOS DADOS JÁ COLETADOS
+    # PAINEL DE ANÁLISE (compartilhado)
     # -------------------------
     st.markdown("---")
-
     if not os.path.exists(PIBIC_VIDEOS_PATH):
         st.warning(
-            "Nenhuma coleta realizada ainda. Configure as categorias na barra "
-            "lateral e clique em **Iniciar Coleta PIBIC**."
+            "Nenhuma coleta realizada ainda. Configure os canais na barra lateral "
+            "e clique em **Iniciar Coleta**."
         )
     else:
         df_v = pd.read_parquet(PIBIC_VIDEOS_PATH)
         df_c = (
             pd.read_parquet(PIBIC_COMMENTS_PATH)
-            if os.path.exists(PIBIC_COMMENTS_PATH)
-            else pd.DataFrame()
+            if os.path.exists(PIBIC_COMMENTS_PATH) else pd.DataFrame()
         )
+        painel.render(df_v, df_c, painel.LABELS_YOUTUBE, prefixo_export="youtube")
 
-        tab_vg, tab_pub, tab_rede, tab_disc, tab_lex, tab_exp = st.tabs([
-            "📊 Visão geral",
-            "👥 Público-alvo",
-            "🕸️ Mapa de comunidades",
-            "🗣️ Discurso (termos & KWIC)",
-            "🔍 Marcadores",
-            "📤 Exportar",
-        ])
+# ==========================================================
+# MÓDULO MAPEAMENTO REDDIT
+# ==========================================================
 
-        # ===== VISÃO GERAL =====
-        with tab_vg:
-            col1, col2, col3 = st.columns(3)
-            col1.metric("🎬 Vídeos", len(df_v))
-            col2.metric("💬 Comentários", len(df_c))
-            col3.metric("📺 Canais", df_v["canal_origem"].nunique())
+elif modo_app == "Mapeamento Reddit":
 
-            if "categoria_pibic" in df_v.columns:
-                st.markdown("#### Vídeos por categoria")
-                st.bar_chart(
-                    df_v["categoria_pibic"].value_counts()
-                    .rename_axis("Categoria").to_frame("Vídeos")
+    st.title("🤖 Mapeamento Reddit – Comunidades")
+    st.markdown(
+        "Coleta dirigida de **subreddits** para mapeamento de comunidades e "
+        "análise de discurso. Mesma camada analítica do módulo YouTube."
+    )
+
+    st.info(
+        "ℹ️ **Nota metodológica:** os rótulos de categoria são organizacionais, "
+        "não classificações validadas."
+    )
+
+    REDDIT_POSTS_PATH = "data/reddit_pibic_posts.parquet"
+    REDDIT_COMMENTS_PATH = "data/reddit_pibic_comments.parquet"
+
+    # -------------------------
+    # SIDEBAR
+    # -------------------------
+    st.sidebar.header("⚙️ Coleta Reddit")
+
+    st.sidebar.subheader("🔒 Credenciais Reddit")
+    R_CLIENT_ID = st.sidebar.text_input("Client ID", type="password", key="r_id")
+    R_CLIENT_SECRET = st.sidebar.text_input("Client Secret", type="password", key="r_secret")
+    R_USER_AGENT = "DemidDataHub_v1"
+
+    fonte_sr = st.sidebar.radio(
+        "Fonte dos subreddits",
+        ["Lista-semente", "Digitar meus subreddits"],
+    )
+
+    if fonte_sr == "Lista-semente":
+        cats_sr = listar_categorias_reddit()
+        cats_sr_sel = st.sidebar.multiselect("Categorias", cats_sr, default=cats_sr)
+        subreddits_sel = [s for s in SUBREDDITS_PIBIC if s["categoria"] in cats_sr_sel]
+    else:
+        st.sidebar.caption("Um por linha. Formato: `subreddit | categoria`")
+        sr_txt = st.sidebar.text_area(
+            "Subreddits",
+            "magicTCG | Magic\npokemon | Pokémon\ngamesEcultura | Jogos BR",
+            height=120,
+        )
+        subreddits_sel = []
+        for linha in sr_txt.splitlines():
+            linha = linha.strip()
+            if not linha:
+                continue
+            if "|" in linha:
+                nome, cat = linha.split("|", 1)
+                subreddits_sel.append({"nome": nome.strip(), "categoria": cat.strip()})
+            else:
+                subreddits_sel.append({"nome": linha, "categoria": "Personalizado"})
+
+    ordenacao = st.sidebar.selectbox(
+        "Ordenação dos posts", ["hot", "top", "new"],
+        format_func=lambda x: {"hot": "Em alta (hot)", "top": "Top do ano", "new": "Mais novos"}[x],
+    )
+    limite_posts = st.sidebar.slider("Posts por subreddit", 5, 100, 30, step=5)
+    r_comments = st.sidebar.checkbox("Coletar comentários", value=True)
+    r_max_comments = st.sidebar.slider("Comentários por post", 10, 300, 100, step=10)
+
+    st.subheader("📋 Subreddits selecionados")
+    st.dataframe(pd.DataFrame(subreddits_sel), use_container_width=True, hide_index=True)
+    st.caption(f"{len(subreddits_sel)} subreddits a coletar.")
+
+    coletar_r_btn = st.sidebar.button("🚀 Iniciar Coleta Reddit")
+
+    # -------------------------
+    # EXECUÇÃO
+    # -------------------------
+    if coletar_r_btn:
+        if not R_CLIENT_ID or not R_CLIENT_SECRET:
+            st.error("Informe as credenciais do Reddit (Client ID e Secret).")
+        elif not subreddits_sel:
+            st.error("Defina ao menos um subreddit.")
+        else:
+            progress_bar = st.progress(0.0, text="Iniciando coleta...")
+
+            def _cb_r(idx, total, nome):
+                progress_bar.progress(min(idx / total, 1.0),
+                                      text=f"Coletando {idx}/{total}: {nome}")
+
+            with st.spinner("Coletando dados do Reddit (PRAW)..."):
+                resultado = fetch_reddit_pibic(
+                    client_id=R_CLIENT_ID,
+                    client_secret=R_CLIENT_SECRET,
+                    user_agent=R_USER_AGENT,
+                    subreddits=subreddits_sel,
+                    limit=limite_posts,
+                    ordenacao=ordenacao,
+                    get_comments=r_comments,
+                    max_comments=r_max_comments,
+                    progress_callback=_cb_r,
+                )
+            progress_bar.progress(1.0, text="Coleta concluída!")
+
+            if resultado.get("erro"):
+                st.error(resultado["erro"])
+            else:
+                st.success(
+                    f"Coleta concluída: {len(resultado['videos'])} posts e "
+                    f"{len(resultado['comments'])} comentários."
                 )
 
-            st.markdown("#### Amostra de vídeos")
-            cols_show = [
-                c for c in ["categoria_pibic", "channel", "title", "view_count",
-                            "comment_count", "url"] if c in df_v.columns
-            ]
-            st.dataframe(df_v[cols_show], use_container_width=True, hide_index=True)
-
-        # ===== PÚBLICO-ALVO =====
-        with tab_pub:
-            st.markdown("#### Núcleo engajado (comentaristas mais ativos)")
-            st.caption(
-                "Autores recorrentes são proxy do núcleo de cada comunidade. "
-                "A coluna *canais_distintos* indica quem circula entre comunidades."
-            )
-            st.dataframe(
-                ay.top_comentaristas(df_c, 30),
-                use_container_width=True, hide_index=True
-            )
-
-            st.markdown("#### Perfil de engajamento por categoria")
-            perfil = ay.perfil_engajamento(df_v, df_c)
-            if not perfil.empty:
-                st.dataframe(perfil, use_container_width=True, hide_index=True)
-                st.caption(
-                    "*comentarios_por_autor* alto sugere comunidade mais concentrada "
-                    "e participativa; baixo sugere audiência mais dispersa."
-                )
-
-        # ===== MAPA DE COMUNIDADES =====
-        with tab_rede:
-            st.markdown("#### Rede de comunidades por público compartilhado")
-            st.caption(
-                "Dois canais se conectam quando têm comentaristas em comum. "
-                "Revela empiricamente quais comunidades se sobrepõem — peça central "
-                "do mapeamento do PIBIC."
-            )
-            with st.spinner("Construindo rede..."):
-                rede = ay.rede_canais(df_c)
-
-            fig_rede = ay.grafo_para_plotly(rede["grafo"])
-            if fig_rede is not None:
-                st.plotly_chart(fig_rede, use_container_width=True)
-
-            colA, colB = st.columns(2)
-            with colA:
-                st.markdown("**Canais mais centrais**")
-                st.dataframe(rede["metricas"], use_container_width=True, hide_index=True)
-            with colB:
-                st.markdown("**Ligações mais fortes**")
-                st.dataframe(rede["edges"], use_container_width=True, hide_index=True)
-
-            st.markdown(f"**Autores-ponte** (comentam em ≥2 canais): {len(rede['bridges'])}")
-            st.dataframe(rede["bridges"].head(50), use_container_width=True, hide_index=True)
-
-        # ===== DISCURSO: TERMOS & KWIC =====
-        with tab_disc:
-            st.markdown("#### Repertório linguístico")
-            cat_opts = ["(todas)"] + (
-                sorted(df_c["categoria_pibic"].dropna().unique())
-                if "categoria_pibic" in df_c.columns else []
-            )
-            cat_sel = st.selectbox("Filtrar por categoria", cat_opts)
-            df_filt = (
-                df_c if cat_sel == "(todas)"
-                else df_c[df_c["categoria_pibic"] == cat_sel]
-            )
-
-            colT, colN = st.columns(2)
-            with colT:
-                st.markdown("**Top termos**")
-                st.dataframe(
-                    ay.frequencia_termos(df_filt, 30),
-                    use_container_width=True, hide_index=True
-                )
-            with colN:
-                grau_n = st.radio("N-grama", [2, 3], horizontal=True,
-                                  format_func=lambda x: "Bigramas" if x == 2 else "Trigramas")
-                st.dataframe(
-                    ay.ngramas(df_filt, n=grau_n, top_n=30),
-                    use_container_width=True, hide_index=True
-                )
-
-            st.markdown("---")
-            st.markdown("#### Concordância (KWIC) — termo em contexto")
-            st.caption(
-                "Ferramenta de análise de discurso: localiza um termo e mostra as "
-                "palavras ao redor, para leitura qualitativa do uso."
-            )
-            termo_kwic = st.text_input("Termo para concordância", "woke")
-            if termo_kwic:
-                kwic = ay.concordancia_kwic(df_filt, termo_kwic, janela=8, max_resultados=200)
-                st.write(f"Ocorrências encontradas: **{len(kwic)}**")
-                st.dataframe(kwic, use_container_width=True, hide_index=True)
-
-        # ===== MARCADORES (LÉXICO) =====
-        with tab_lex:
-            st.markdown("#### Léxico exploratório de marcadores discursivos")
-            st.warning(
-                "⚠️ **Exploratório, não classificatório.** O léxico apenas localiza "
-                "ocorrências de termos para inspeção qualitativa. Não rotula "
-                "ideologicamente — a interpretação é do pesquisador, idealmente no MAXQDA."
-            )
-            with st.spinner("Aplicando léxico..."):
-                lex = ay.score_lexico(df_c)
-
-            colE, colTr = st.columns(2)
-            with colE:
-                st.markdown("**Ocorrências por eixo**")
-                st.dataframe(lex["resumo_eixos"], use_container_width=True, hide_index=True)
-            with colTr:
-                st.markdown("**Termos encontrados**")
-                st.dataframe(lex["resumo_termos"].head(25),
-                             use_container_width=True, hide_index=True)
-
-            if not lex["por_categoria"].empty:
-                st.markdown("**Marcadores por categoria**")
-                st.dataframe(lex["por_categoria"], use_container_width=True, hide_index=True)
-
-            st.markdown("#### Comentários mais marcados (para leitura qualitativa)")
-            st.dataframe(
-                ay.comentarios_mais_marcados(lex["por_comentario"], 40),
-                use_container_width=True, hide_index=True
-            )
-
-        # ===== EXPORTAR =====
-        with tab_exp:
-            st.markdown("#### Exportar para análise de conteúdo (MAXQDA)")
-            st.caption(
-                "CSV estruturado: uma linha = um documento (vídeo ou comentário), "
-                "com variáveis de canal, categoria, autor, data e engajamento."
-            )
-            df_maxqda = exportar_maxqda(df_v, df_c)
-            st.write(f"Total de documentos para análise: **{len(df_maxqda)}**")
-
-            csv_maxqda = df_maxqda.to_csv(index=False).encode("utf-8-sig")
-            st.download_button(
-                "⬇️ Baixar CSV para MAXQDA",
-                data=csv_maxqda,
-                file_name=f"pibic_maxqda_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-            )
-            st.download_button(
-                "⬇️ Baixar comentários (Parquet)",
-                data=df_c.to_parquet(index=False),
-                file_name="pibic_comments.parquet",
-                mime="application/octet-stream",
-            )
+    # -------------------------
+    # PAINEL DE ANÁLISE (compartilhado)
+    # -------------------------
+    st.markdown("---")
+    if not os.path.exists(REDDIT_POSTS_PATH):
+        st.warning(
+            "Nenhuma coleta realizada ainda. Informe as credenciais, configure os "
+            "subreddits e clique em **Iniciar Coleta Reddit**."
+        )
+    else:
+        df_v = pd.read_parquet(REDDIT_POSTS_PATH)
+        df_c = (
+            pd.read_parquet(REDDIT_COMMENTS_PATH)
+            if os.path.exists(REDDIT_COMMENTS_PATH) else pd.DataFrame()
+        )
+        painel.render(df_v, df_c, painel.LABELS_REDDIT, prefixo_export="reddit")
 
 # ==========================================================
 # MÓDULO DIÁRIO OFICIAL

@@ -174,3 +174,155 @@ def fetch_reddit_data(client_id, client_secret, user_agent, keywords=None, limit
     logging.info("Coleta finalizada via fetch_reddit_data.")
 
     return df_final
+
+
+# ==========================================================
+# COLETA POR SUBREDDIT — mapeamento PIBIC (schema unificado)
+# ==========================================================
+# Gera o MESMO schema do coletor PIBIC do YouTube, para que o módulo
+# analise_youtube.py funcione sem alteração (canal_origem = subreddit).
+
+PIBIC_POSTS_PATH = os.path.join(DATA_DIR, "reddit_pibic_posts.parquet")
+PIBIC_COMMENTS_PATH = os.path.join(DATA_DIR, "reddit_pibic_comments.parquet")
+
+
+def collect_subreddit_pibic(
+    client,
+    subreddit_name,
+    categoria="",
+    limit=50,
+    ordenacao="hot",
+    get_comments=True,
+    max_comments=100,
+):
+    """
+    Coleta posts e comentários de um subreddit, capturando autor.
+    Retorna (posts, comments) já no schema unificado de análise.
+    """
+    sub = client.subreddit(subreddit_name)
+
+    # Seleciona a listagem conforme a ordenação
+    if ordenacao == "top":
+        listagem = sub.top(time_filter="year", limit=limit)
+    elif ordenacao == "new":
+        listagem = sub.new(limit=limit)
+    else:
+        listagem = sub.hot(limit=limit)
+
+    posts, comments = [], []
+
+    for post in listagem:
+        posts.append({
+            "video_id": post.id,                     # post_id (mantém nome p/ reuso)
+            "channel": subreddit_name,
+            "title": post.title or "",
+            "description": (post.selftext or "")[:500],
+            "view_count": 0,                          # Reddit não expõe views
+            "like_count": int(post.score or 0),       # score = upvotes líquidos
+            "comment_count": int(post.num_comments or 0),
+            "published_at": datetime.fromtimestamp(post.created_utc),
+            "url": f"https://reddit.com{post.permalink}",
+            "collected_at": datetime.utcnow(),
+            "categoria_pibic": categoria,
+            "canal_origem": subreddit_name,
+            "collector": "praw",
+        })
+
+        if get_comments:
+            try:
+                post.comments.replace_more(limit=0)
+                for c in post.comments.list()[:max_comments]:
+                    body = getattr(c, "body", "") or ""
+                    if not body or body in ("[deleted]", "[removed]"):
+                        continue
+                    comments.append({
+                        "comment_id": c.id,
+                        "video_id": post.id,
+                        "parent_id": getattr(c, "parent_id", None),
+                        "author": str(c.author),
+                        "texto": body,
+                        "like_count": int(getattr(c, "score", 0) or 0),
+                        "published_at": datetime.fromtimestamp(c.created_utc),
+                        "collected_at": datetime.utcnow(),
+                        "categoria_pibic": categoria,
+                        "canal_origem": subreddit_name,
+                    })
+            except Exception as e:
+                logging.error(f"Erro nos comentários de {post.id}: {e}")
+
+        time.sleep(0.3)
+
+    return posts, comments
+
+
+def fetch_reddit_pibic(
+    client_id,
+    client_secret,
+    user_agent,
+    subreddits,
+    limit=50,
+    ordenacao="hot",
+    get_comments=True,
+    max_comments=100,
+    progress_callback=None,
+):
+    """
+    Coleta um conjunto de subreddits e persiste em parquet dedicado.
+
+    Parâmetros:
+        subreddits : lista de dicts {nome, categoria}
+        progress_callback : função(idx, total, nome) para feedback de UI
+
+    Retorna dict {"videos": df_posts, "comments": df_comments}
+    (chave "videos" mantida para compatibilidade com o painel de análise).
+    """
+    if not client_id or not client_secret:
+        logging.error("Credenciais Reddit ausentes.")
+        return {"videos": pd.DataFrame(), "comments": pd.DataFrame(),
+                "erro": "Credenciais Reddit ausentes."}
+
+    try:
+        client = get_reddit_client(client_id, client_secret, user_agent)
+    except Exception as e:
+        return {"videos": pd.DataFrame(), "comments": pd.DataFrame(),
+                "erro": f"Falha ao conectar no Reddit: {e}"}
+
+    all_posts, all_comments = [], []
+    total = len(subreddits)
+
+    for idx, sr in enumerate(subreddits, start=1):
+        nome = sr["nome"].strip().lstrip("r/").lstrip("/")
+        if not nome:
+            continue
+        if progress_callback:
+            progress_callback(idx, total, f"r/{nome}")
+
+        try:
+            posts, comments = collect_subreddit_pibic(
+                client=client,
+                subreddit_name=nome,
+                categoria=sr.get("categoria", ""),
+                limit=limit,
+                ordenacao=ordenacao,
+                get_comments=get_comments,
+                max_comments=max_comments,
+            )
+            all_posts.extend(posts)
+            all_comments.extend(comments)
+        except Exception as e:
+            logging.error(f"Erro no subreddit r/{nome}: {e}")
+
+    if all_posts:
+        append_parquet(PIBIC_POSTS_PATH, pd.DataFrame(all_posts), "video_id")
+    if all_comments:
+        append_parquet(PIBIC_COMMENTS_PATH, pd.DataFrame(all_comments), "comment_id")
+
+    logging.info(
+        f"Reddit PIBIC | posts={len(all_posts)} | comentários={len(all_comments)}"
+    )
+
+    return {
+        "videos": pd.DataFrame(all_posts),
+        "comments": pd.DataFrame(all_comments),
+        "erro": None,
+    }
