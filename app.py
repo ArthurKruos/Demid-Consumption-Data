@@ -521,6 +521,18 @@ else:
         except Exception:
             return pd.DataFrame(columns=cols)
 
+    @st.cache_data(show_spinner=False)
+    def _arquivo_bytes(caminho):
+        # Serve os bytes do arquivo direto do disco — sem carregar em DataFrame
+        with open(caminho, "rb") as f:
+            return f.read()
+
+    @st.cache_data(show_spinner="Gerando CSV completo (pode demorar)...")
+    def _csv_completo_doe(caminho):
+        # Só é chamado sob demanda (via checkbox), com o texto integral
+        df = pd.read_parquet(caminho)
+        return df.to_csv(index=False).encode("utf-8")
+
     try:
 
         # ==========================================================
@@ -582,17 +594,47 @@ else:
 
         st.write("Tamanho da base:", df_completo.shape)
 
-        # CSV leve: exclui o texto integral ('conteudo') para não estourar memória
-        _cols_csv = [c for c in df_completo.columns if c != "conteudo"]
-        csv = df_completo[_cols_csv].to_csv(index=False).encode("utf-8")
+        col_dl1, col_dl2 = st.columns(2)
 
-        st.download_button(
-            label="⬇️ Baixar resumo do Diário Oficial (CSV)",
-            data=csv,
-            file_name="resumo_diario_oficial_pb.csv",
-            mime="text/csv"
+        # --- Resumo (CSV leve, sem texto integral) ---
+        with col_dl1:
+            st.markdown("**Resumo** (scores + metadados)")
+            _cols_csv = [c for c in df_completo.columns if c != "conteudo"]
+            csv_resumo = df_completo[_cols_csv].to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="⬇️ Resumo (CSV)",
+                data=csv_resumo,
+                file_name="resumo_diario_oficial_pb.csv",
+                mime="text/csv",
+            )
+            st.caption("Leve. Ideal para gráficos e estatísticas rápidas.")
+
+        # --- Base completa (Parquet, com texto integral) ---
+        with col_dl2:
+            st.markdown("**Base completa** (com texto integral)")
+            st.download_button(
+                label="⬇️ Base completa (Parquet)",
+                data=_arquivo_bytes(PARQUET_PATH),
+                file_name="base_completa_diario_oficial_pb.parquet",
+                mime="application/octet-stream",
+            )
+            st.caption("Recomendado. Abre em pandas/R para suas próprias análises.")
+
+        # --- Base completa em CSV (sob demanda — arquivo grande) ---
+        st.markdown("---")
+        st.markdown("**Exportar tudo em CSV** (texto integral incluído)")
+        st.caption(
+            "⚠️ Arquivo grande. Gerado apenas quando você marcar a opção abaixo, "
+            "para não sobrecarregar a aplicação."
         )
-        st.caption("O CSV traz os scores e metadados. O texto integral está no parquet.")
+        if st.checkbox("Gerar CSV completo com o texto integral dos diários"):
+            csv_completo = _csv_completo_doe(PARQUET_PATH)
+            st.download_button(
+                label="⬇️ Base completa (CSV, texto integral)",
+                data=csv_completo,
+                file_name="base_completa_diario_oficial_pb.csv",
+                mime="text/csv",
+            )
 
         st.markdown("---")
 
