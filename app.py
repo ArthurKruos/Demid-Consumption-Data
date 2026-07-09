@@ -498,36 +498,36 @@ else:
     st.header("🏛️ Painel Analítico – Diário Oficial")
 
     PARQUET_PATH = "data/doe_raw.parquet"
+    NER_PATH = "data/doe_ner.parquet"
 
     # ==========================================================
-    # CACHE NER
+    # CARREGADORES COM CACHE (evitam OOM no Streamlit Cloud)
     # ==========================================================
+    # O processamento da base e a leitura das entidades rodam UMA vez
+    # e ficam em cache — não são recalculados a cada interação.
+    # O NER NÃO roda ao vivo: usamos o doe_ner.parquet já pré-computado,
+    # evitando carregar o modelo spaCy (~560 MB) na nuvem.
+
+    @st.cache_data(show_spinner="Processando base do Diário Oficial...")
+    def _carregar_base_doe(caminho):
+        return processar_parquet(caminho, salvar_csv=False)
 
     @st.cache_data(show_spinner=False)
-    def processar_ner(textos):
-
-        entidades_lista = []
-
-        for texto in textos:
-
-            entidades = extrair_entidades(texto)
-
-            entidades_lista.append(entidades)
-
-        return entidades_lista
+    def _carregar_entidades_doe(caminho):
+        # Lê só as colunas necessárias (sem 'conteudo'/'entidades' pesados)
+        cols = ["data_doe", "orgs", "pessoas", "locais"]
+        try:
+            return pd.read_parquet(caminho, columns=cols)
+        except Exception:
+            return pd.DataFrame(columns=cols)
 
     try:
 
         # ==========================================================
-        # PROCESSAMENTO BASE
+        # PROCESSAMENTO BASE (cacheado)
         # ==========================================================
 
-        with st.spinner("Processando base do Diário Oficial..."):
-
-            resultados = processar_parquet(
-                PARQUET_PATH,
-                salvar_csv=False
-            )
+        resultados = _carregar_base_doe(PARQUET_PATH)
 
         df_completo = resultados["df_completo"]
         resumo_anual = resultados["resumo_anual"]
@@ -545,49 +545,10 @@ else:
             st.stop()
 
         # ==========================================================
-        # LIMITE NER
+        # ENTIDADES (pré-computadas — sem NER ao vivo)
         # ==========================================================
 
-        LIMITE_NER = 200
-
-        df_ner = df_completo.head(LIMITE_NER).copy()
-
-        # ==========================================================
-        # NER
-        # ==========================================================
-
-        with st.spinner("Extraindo entidades do Diário Oficial..."):
-
-            textos = df_ner["conteudo"].fillna("").tolist()
-
-            entidades_lista = processar_ner(textos)
-
-        df_ner["entidades"] = entidades_lista
-
-        # ==========================================================
-        # ORGANIZAÇÃO DAS ENTIDADES
-        # ==========================================================
-
-        df_ner["orgs"] = df_ner["entidades"].apply(
-            lambda x: x.get("ORG", [])
-        )
-
-        df_ner["pessoas"] = df_ner["entidades"].apply(
-            lambda x: x.get("PER", []) + x.get("PERSON", [])
-        )
-
-        df_ner["locais"] = df_ner["entidades"].apply(
-            lambda x: x.get("LOC", [])
-        )
-
-        # ==========================================================
-        # SALVAR PARQUET ENRIQUECIDO
-        # ==========================================================
-
-        df_ner.to_parquet(
-            "data/doe_ner.parquet",
-            index=False
-        )
+        df_ner = _carregar_entidades_doe(NER_PATH)
 
         # ==========================================================
         # MÉTRICAS
@@ -621,14 +582,17 @@ else:
 
         st.write("Tamanho da base:", df_completo.shape)
 
-        csv = df_completo.to_csv(index=False).encode("utf-8")
+        # CSV leve: exclui o texto integral ('conteudo') para não estourar memória
+        _cols_csv = [c for c in df_completo.columns if c != "conteudo"]
+        csv = df_completo[_cols_csv].to_csv(index=False).encode("utf-8")
 
         st.download_button(
-            label="⬇️ Baixar base completa do Diário Oficial (CSV)",
+            label="⬇️ Baixar resumo do Diário Oficial (CSV)",
             data=csv,
-            file_name="base_diario_oficial_pb.csv",
+            file_name="resumo_diario_oficial_pb.csv",
             mime="text/csv"
         )
+        st.caption("O CSV traz os scores e metadados. O texto integral está no parquet.")
 
         st.markdown("---")
 
@@ -682,49 +646,37 @@ else:
         # TOP ÓRGÃOS
         # ==========================================================
 
-        todas_orgs = []
-
-        for lista in df_ner["orgs"]:
-
-            todas_orgs.extend(lista)
-
-        freq_orgs = Counter(todas_orgs)
-
-        top_orgs = pd.DataFrame(
-            freq_orgs.most_common(15),
-            columns=["orgao", "frequencia"]
-        )
-
         st.subheader("🏢 Top Órgãos Citados")
 
-        fig_orgs = px.bar(
-            top_orgs,
-            x="orgao",
-            y="frequencia"
-        )
+        if df_ner.empty or "orgs" not in df_ner.columns:
+            st.info(
+                "Entidades (NER) ainda não pré-computadas. Gere o arquivo "
+                "`data/doe_ner.parquet` localmente para exibir esta seção."
+            )
+        else:
+            todas_orgs = []
+            for lista in df_ner["orgs"]:
+                if lista is not None:
+                    todas_orgs.extend(lista)
 
-        st.plotly_chart(
-            fig_orgs,
-            use_container_width=True
-        )
+            freq_orgs = Counter(todas_orgs)
+            top_orgs = pd.DataFrame(
+                freq_orgs.most_common(15),
+                columns=["orgao", "frequencia"]
+            )
 
-        # ==========================================================
-        # ENTIDADES EXTRAÍDAS
-        # ==========================================================
+            fig_orgs = px.bar(top_orgs, x="orgao", y="frequencia")
+            st.plotly_chart(fig_orgs, use_container_width=True)
 
-        st.subheader("🏛️ Entidades Extraídas")
+            # ==========================================================
+            # ENTIDADES EXTRAÍDAS
+            # ==========================================================
 
-        st.data_editor(
-            df_ner[
-                [
-                    "data_doe",
-                    "orgs",
-                    "pessoas",
-                    "locais"
-                ]
-            ],
-            use_container_width=True
-        )
+            st.subheader("🏛️ Entidades Extraídas")
+            st.data_editor(
+                df_ner[["data_doe", "orgs", "pessoas", "locais"]],
+                use_container_width=True
+            )
 
         # ==========================================================
         # EVOLUÇÃO DE TERMOS
